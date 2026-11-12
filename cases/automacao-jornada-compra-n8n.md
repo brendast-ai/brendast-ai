@@ -1,14 +1,14 @@
-# Automação de jornada de compra e recuperação de pagamento com n8n
+# Automação de jornada de compra, recuperação de pagamento e entrega com n8n
 
 ## Visão rápida
 
-**Contexto:** automação de uma jornada comercial real, conectando formulário de entrada, cobrança, acompanhamento de pagamento, atualização de lead e entrega digital.
+**Contexto:** automação de uma jornada comercial real, conectando formulário de entrada, cobrança, acompanhamento de pagamento, recuperação de clientes, atualização de lead, entrega digital e monitoramento de falhas.
 
-**Problema:** o processo exigia várias etapas manuais entre captar o lead, criar a cobrança, acompanhar o status do pagamento, atualizar os dados comerciais e entregar o produto correto após a confirmação.
+**Problema:** o processo exigia várias etapas manuais entre captar o lead, criar a cobrança, acompanhar o status do pagamento, recuperar quem não concluiu a compra, atualizar os dados comerciais e entregar o produto correto após a confirmação.
 
 **Minha atuação:** desenho do fluxo, definição das regras de negócio, integração entre sistemas, configuração dos workflows no n8n, testes e acompanhamento do comportamento em produção.
 
-**Resultado:** o processo passou a executar automaticamente a criação da cobrança, o registro do lead, o acompanhamento do pagamento e a entrega do produto após confirmação, reduzindo dependência de execução manual e risco de falhas operacionais.
+**Resultado:** o processo passou a executar automaticamente a criação da cobrança, o registro do lead, a recuperação de pagamentos pendentes, a confirmação financeira, a atualização do registro e a entrega do produto, reduzindo dependência de execução manual e risco de falhas operacionais.
 
 ---
 
@@ -17,23 +17,23 @@
 Uma venda digital parecia simples na superfície, mas envolvia várias operações diferentes:
 
 1. receber os dados do interessado;
-2. criar ou registrar o cliente no meio de pagamento;
+2. criar o cliente no meio de pagamento;
 3. gerar a cobrança;
 4. direcionar a pessoa para o pagamento;
 5. registrar os dados comerciais;
 6. acompanhar se o pagamento foi confirmado;
-7. atualizar o status da venda;
-8. entregar automaticamente o produto correto.
+7. recuperar quem não concluiu a compra;
+8. atualizar o status da venda;
+9. entregar automaticamente o produto correto;
+10. monitorar falhas nos próprios workflows.
 
-Quando essas etapas dependem de acompanhamento manual, surgem riscos de atraso, erro de registro, perda de lead e entrega inconsistente.
+Quando essas etapas dependem de acompanhamento manual, surgem riscos de atraso, erro de registro, perda de lead, cobrança não acompanhada e entrega inconsistente.
 
-O objetivo da automação foi transformar esse processo em um fluxo único, rastreável e orientado por eventos.
+O objetivo da automação foi transformar esse processo em um fluxo rastreável, orientado por eventos e com recuperação automática de oportunidades.
 
 ---
 
 ## Arquitetura do fluxo
-
-De forma simplificada:
 
 ```mermaid
 flowchart TD
@@ -44,18 +44,29 @@ flowchart TD
     E --> F[Registrar lead e pagamento]
     F --> G[Redirecionar para checkout]
 
-    H[Asaas envia evento de pagamento] --> I[n8n recebe webhook]
-    I --> J{Pagamento confirmado ou recebido?}
-    J -- Não --> K[Encerrar sem liberar produto]
-    J -- Sim --> L[Consultar pagamento]
-    L --> M[Consultar cliente]
-    M --> N[Atualizar registro da venda]
-    N --> O[Identificar produto]
-    O --> P[Enviar e-mail com acesso]
-    P --> Q[Responder webhook]
+    H[Agendamento periódico] --> I[Buscar pagamentos pendentes]
+    I --> J[Calcular janela de follow-up]
+    J --> K[Consultar status atual no Asaas]
+    K --> L{Ainda está pendente?}
+    L -- Não --> M[Encerrar]
+    L -- Sim --> N[Buscar template]
+    N --> O{30 min, 24 h ou 72 h?}
+    O --> P[Enviar follow-up com link da cobrança]
+
+    Q[Asaas envia evento de pagamento] --> R[n8n recebe webhook]
+    R --> S{Pagamento confirmado ou recebido?}
+    S -- Não --> T[Encerrar sem liberar produto]
+    S -- Sim --> U[Consultar pagamento]
+    U --> V[Consultar cliente]
+    V --> W[Atualizar registro da venda]
+    W --> X[Identificar produto]
+    X --> Y[Enviar e-mail com acesso]
+
+    Z[Falha em workflow] --> AA[Error Trigger]
+    AA --> AB[Enviar alerta operacional]
 ```
 
-O fluxo foi dividido em duas partes principais: **entrada e criação da cobrança** e **confirmação e entrega após pagamento**.
+A solução foi dividida em workflows com responsabilidades diferentes: **entrada e cobrança**, **recuperação de não pagamento**, **confirmação e entrega** e **monitoramento de erros**.
 
 ---
 
@@ -74,15 +85,40 @@ A partir daí, o n8n:
 
 A automação mantém no registro informações como identificadores da cobrança, status, cliente, produto, origem e data de criação.
 
-Isso permite que as etapas seguintes não dependam de busca manual ou conferência isolada em diferentes ferramentas.
+---
+
+## 2. Recuperação automática de não pagamento
+
+Um segundo workflow acompanha cobranças ainda pendentes.
+
+Ele roda periodicamente, busca registros com status **PENDING** e calcula há quanto tempo a cobrança foi criada.
+
+Foram definidas três janelas de contato:
+
+- aproximadamente **30 minutos**;
+- aproximadamente **24 horas**;
+- aproximadamente **72 horas**.
+
+Antes de enviar qualquer mensagem, o fluxo consulta novamente o Asaas para verificar o status atual da cobrança.
+
+Se o pagamento já deixou de estar pendente, o processo é interrompido.
+
+Se continua pendente, o workflow:
+
+- identifica a janela correta;
+- busca o template de comunicação correspondente ao produto e ao momento;
+- envia um e-mail de follow-up;
+- inclui o link original da cobrança para que o cliente possa retomar a compra.
+
+Essa validação evita enviar mensagens de recuperação para alguém que já pagou.
 
 ---
 
-## 2. Confirmação do pagamento
+## 3. Confirmação do pagamento
 
-O segundo workflow é orientado por eventos do Asaas.
+O workflow de confirmação é orientado por eventos do Asaas.
 
-Ele recebe notificações de pagamento por webhook e filtra somente eventos relevantes de confirmação ou recebimento.
+Ele recebe notificações por webhook e processa apenas eventos de pagamento relevantes.
 
 Antes de continuar, o fluxo valida:
 
@@ -92,15 +128,13 @@ Antes de continuar, o fluxo valida:
 
 Somente pagamentos confirmados ou recebidos seguem para a etapa de entrega.
 
-Essa regra impede que eventos intermediários liberem um produto antes da confirmação financeira.
-
 ---
 
-## 3. Consulta e atualização dos dados
+## 4. Consulta e atualização dos dados
 
 Após a confirmação, o fluxo consulta novamente a API do Asaas para recuperar os dados atuais da cobrança e do cliente.
 
-Com isso, o sistema consegue atualizar o registro comercial com os dados consolidados da venda, incluindo:
+Com isso, o registro comercial é atualizado com o estado consolidado da venda, incluindo:
 
 - status;
 - identificação da cobrança;
@@ -109,15 +143,13 @@ Com isso, o sistema consegue atualizar o registro comercial com os dados consoli
 - nome;
 - e-mail.
 
-Esse passo mantém o acompanhamento comercial sincronizado com o estado real do pagamento.
-
 ---
 
-## 4. Entrega automática do produto
+## 5. Entrega automática do produto
 
 A referência do produto é usada para localizar a configuração de entrega correspondente.
 
-O conteúdo do e-mail não fica fixo dentro de cada fluxo. Ele pode ser buscado a partir de uma tabela de configuração, permitindo variar:
+O conteúdo do e-mail pode ser recuperado de uma tabela de configuração, permitindo variar:
 
 - assunto;
 - título;
@@ -128,7 +160,23 @@ O conteúdo do e-mail não fica fixo dentro de cada fluxo. Ele pode ser buscado 
 
 Depois disso, o n8n envia automaticamente o e-mail de boas-vindas e acesso ao produto adquirido.
 
-Isso permite que a mesma lógica de automação seja reutilizada para produtos diferentes sem precisar duplicar toda a estrutura do workflow.
+---
+
+## 6. Monitoramento de falhas
+
+Também existe um workflow separado para monitoramento de erros.
+
+Quando um workflow falha, um **Error Trigger** captura informações da execução, como:
+
+- nome do workflow;
+- mensagem de erro;
+- último nó executado;
+- identificador da execução;
+- modo de execução;
+- horário;
+- link para investigação.
+
+Essas informações são enviadas automaticamente para um canal operacional, permitindo identificar falhas sem depender de inspeção manual constante do n8n.
 
 ---
 
@@ -138,21 +186,29 @@ Isso permite que a mesma lógica de automação seja reutilizada para produtos d
 
 A entrega não acontece apenas porque uma cobrança foi criada.
 
-O fluxo espera um evento posterior do meio de pagamento e valida o status antes de liberar o produto.
+O fluxo espera a confirmação do meio de pagamento e valida o status antes de liberar o produto.
 
-### Produto identificado por referência externa
+### Follow-up só acontece se o pagamento continuar pendente
 
-A cobrança recebe uma referência que permite ao fluxo saber qual produto foi comprado e recuperar a configuração correta de entrega.
+Antes de cada recuperação, o sistema consulta novamente a cobrança no Asaas.
 
-### Registro comercial atualizado automaticamente
+Isso impede mensagens indevidas para clientes que já concluíram o pagamento.
 
-Os dados da venda são atualizados a partir do próprio fluxo, reduzindo a necessidade de conferir manualmente formulário, cobrança e entrega em ferramentas diferentes.
+### Recuperação em momentos diferentes
 
-### Processamento orientado por eventos
+A estratégia foi dividida em janelas distintas, permitindo adaptar a comunicação ao tempo decorrido desde a criação da cobrança.
 
-Em vez de consultar constantemente o meio de pagamento, a confirmação chega por webhook.
+### Templates separados da lógica
 
-Isso reduz processamento desnecessário e permite reagir ao evento no momento em que ele acontece.
+Os textos de follow-up e entrega são buscados a partir de configurações externas ao fluxo.
+
+Isso facilita reutilização e alteração das comunicações sem reconstruir a automação.
+
+### Monitoramento também faz parte da automação
+
+O fluxo não termina na execução da regra de negócio.
+
+Falhas dos workflows também são capturadas e encaminhadas para investigação.
 
 ---
 
@@ -166,6 +222,7 @@ Isso reduz processamento desnecessário e permite reagir ao evento no momento em
 - **Google Sheets**
 - **SMTP / e-mail transacional**
 - **Formulário com envio por webhook**
+- **Workflow de error handling / observabilidade**
 
 ---
 
@@ -173,9 +230,9 @@ Isso reduz processamento desnecessário e permite reagir ao evento no momento em
 
 Minha atuação esteve no desenho do processo, definição das regras de negócio, configuração dos workflows, integração das APIs e validação do fluxo ponta a ponta.
 
-O trabalho envolveu transformar uma jornada comercial com várias etapas independentes em um processo automatizado capaz de acompanhar a venda desde a entrada do lead até a confirmação financeira e entrega digital.
+O trabalho envolveu transformar uma jornada comercial com várias etapas independentes em um processo automatizado capaz de acompanhar a venda desde a entrada do lead até a confirmação financeira, recuperação de pagamentos pendentes e entrega digital.
 
-Também defini os pontos em que o fluxo deveria continuar, interromper ou buscar novas informações antes de executar uma ação.
+Também defini os pontos em que o fluxo deveria continuar, interromper, consultar novamente uma fonte externa ou acionar um canal de monitoramento.
 
 ---
 
@@ -186,6 +243,7 @@ Este repositório documenta a arquitetura e as decisões do fluxo sem expor dado
 Permanecem privados:
 
 - credenciais;
+- tokens e chaves de API;
 - IDs internos;
 - URLs de webhooks;
 - identificadores de planilhas;
