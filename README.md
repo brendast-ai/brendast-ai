@@ -28,6 +28,14 @@ A solução passou a representar estados intermediários da operação e foi val
 
 ➡️ [Ver projeto](https://github.com/brendast-ai/confiabilidade-em-agendamentos)
 
+
+### ⚙️ Automação de jornada de compra com n8n
+Case de uma automação real que conecta **formulário, Asaas, Google Sheets e e-mail**, acompanhando a jornada desde a entrada do lead até a confirmação do pagamento e entrega automática do produto.
+
+O fluxo usa **webhooks, APIs REST, regras condicionais e atualização de dados** para reduzir etapas manuais e manter o processo comercial sincronizado.
+
+➡️ [Ver projeto](https://github.com/brendast-ai/brendast-ai/blob/main/cases/automacao-jornada-compra-n8n.md)
+
 ---
 
 ## Tecnologias e práticas
